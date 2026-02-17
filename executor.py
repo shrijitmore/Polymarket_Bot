@@ -163,15 +163,16 @@ class OrderExecutor:
         
         # Log to database
         await db.log_event(
-            "INFO",
-            "executor",
-            f"DRY_RUN trade executed: {signal.get('strategy')}",
-            {
+            event_type="dry_run_trade_executed",
+            details={
+                "module": "executor",
+                "message": f"DRY_RUN trade executed: {signal.get('strategy')}",
                 "position_id": position_id,
                 "strategy": signal.get("strategy"),
                 "expected_edge": expected_edge,
                 "total_cost": actual_total_cost
-            }
+            },
+            level="INFO"
         )
         
         return True
@@ -297,17 +298,21 @@ class OrderExecutor:
         Returns:
             Order result or None
         """
-        # Note: This requires token_id mapping from market_id + outcome
-        # In production, you'd need to fetch token_id from Polymarket API
-        token_id = f"{market_id}_{leg['outcome']}"  # Placeholder
-        
+        token_id = leg.get("token_id")
+        if not token_id:
+            logger.error(f"Missing token_id for leg: {leg.get('outcome')}")
+            return None
+
+        neg_risk = leg.get("neg_risk", False)
+
         result = await clob_client.place_order(
             token_id=token_id,
             side="BUY",
             price=leg["price"],
-            size=leg["size_tokens"]
+            size=leg["size_tokens"],
+            neg_risk=neg_risk,
         )
-        
+
         return result
     
     async def _cancel_all_orders(self, order_results: List[Any]) -> None:
@@ -331,14 +336,15 @@ class OrderExecutor:
         await db.update_position(position_id, failed_position)
         
         await db.log_event(
-            "ERROR",
-            "executor",
-            f"Trade failed: {reason}",
-            {
+            event_type="trade_failed",
+            details={
+                "module": "executor",
+                "message": f"Trade failed: {reason}",
                 "position_id": position_id,
                 "strategy": signal.get("strategy"),
                 "reason": reason
-            }
+            },
+            level="ERROR"
         )
 
 

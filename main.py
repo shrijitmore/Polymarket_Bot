@@ -56,12 +56,14 @@ class TradingBot:
             logger.info("Initializing database...")
             await init_db()
             
-            # Initialize CLOB client (skip if DRY_RUN and missing key)
-            if not settings.dry_run:
-                logger.info("Initializing CLOB client...")
+            # Initialize CLOB client (needed for orderbook reads, even in DRY_RUN)
+            logger.info("Initializing CLOB client...")
+            try:
                 await init_clob_client()
-            else:
-                logger.info("Skipping CLOB client (DRY_RUN mode)")
+            except Exception as e:
+                if not settings.dry_run:
+                    raise
+                logger.warning(f"CLOB client init failed (DRY_RUN, orderbook reads may fail): {e}")
             
             # Start Binance feed if late-market enabled
             if settings.enable_late_market:

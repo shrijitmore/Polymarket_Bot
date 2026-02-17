@@ -42,7 +42,7 @@ class MongoDBHandler(logging.Handler):
             # Asyncio-safe: schedule the coroutine
             import asyncio
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 if loop.is_running():
                     # Create task to log to MongoDB with new signature
                     asyncio.create_task(self.db.log_event(

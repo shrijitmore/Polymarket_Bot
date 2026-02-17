@@ -71,14 +71,20 @@ class Settings(BaseSettings):
     max_spread_late_market: float = Field(default=1.0, gt=0, description="Max spread for late market %")
     
     # ========================================
-    # LATE-MARKET STRATEGY
+    # LATE-MARKET STRATEGY (BTC 5m)
     # ========================================
     enable_late_market: bool = Field(default=True, description="Enable late-market strategy")
     late_market_window_start: int = Field(default=180, gt=0, description="Late window start (sec before close)")
     late_market_window_end: int = Field(default=60, gt=0, description="Late window end (sec before close)")
-    late_market_min_deviation_pct: float = Field(default=3.0, gt=0, description="Min price deviation %")
+    late_market_min_deviation_pct: float = Field(default=0.05, gt=0, description="Min BTC price deviation %")
     late_market_max_volatility_pct: float = Field(default=1.5, gt=0, description="Max volatility %")
-    late_market_max_price: float = Field(default=0.99, gt=0, le=1, description="Max entry price")
+    late_market_max_price: float = Field(default=0.95, gt=0, le=1, description="Max entry price")
+
+    # ========================================
+    # BTC 5M SCAN SETTINGS
+    # ========================================
+    btc_5m_scan_interval_seconds: int = Field(default=2, gt=0, description="BTC 5m scan interval seconds")
+    btc_5m_min_volume: float = Field(default=100.0, gt=0, description="Min volume for BTC 5m markets")
     
     # ========================================
     # FEATURE FLAGS
@@ -107,8 +113,8 @@ class Settings(BaseSettings):
     @classmethod
     def validate_late_window(cls, v: int) -> int:
         """Validate late market window."""
-        if v < 30 or v > 300:
-            raise ValueError("Late market window must be between 30 and 300 seconds")
+        if v < 10 or v > 600:
+            raise ValueError("Late market window must be between 10 and 600 seconds")
         return v
     
     def model_post_init(self, __context) -> None:

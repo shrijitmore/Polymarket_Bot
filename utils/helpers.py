@@ -127,14 +127,19 @@ def generate_position_id(market_id: str, strategy: str) -> str:
 def time_to_close(expires_at: datetime) -> int:
     """
     Calculate seconds until market close.
-    
+
     Args:
-        expires_at: Market expiration datetime
-    
+        expires_at: Market expiration datetime (naive or tz-aware)
+
     Returns:
         Seconds until close (negative if already closed)
     """
-    delta = expires_at - datetime.utcnow()
+    from datetime import timezone as tz
+    now = datetime.now(tz.utc)
+    # Make expires_at tz-aware if naive (assume UTC)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=tz.utc)
+    delta = expires_at - now
     return int(delta.total_seconds())
 
 
@@ -226,19 +231,21 @@ def is_within_late_window(
 
 def validate_binary_market(outcomes: List[Dict]) -> bool:
     """
-    Validate that market is a true binary (YES/NO) market.
-    
+    Validate that market is a true binary market (YES/NO or Up/Down).
+
     Args:
         outcomes: List of outcome dictionaries
-    
+
     Returns:
         True if valid binary market
     """
     if len(outcomes) != 2:
         return False
-    
+
     outcome_names = [o.get("outcome", "").upper() for o in outcomes]
-    return "YES" in outcome_names and "NO" in outcome_names
+    is_yes_no = "YES" in outcome_names and "NO" in outcome_names
+    is_up_down = "UP" in outcome_names and "DOWN" in outcome_names
+    return is_yes_no or is_up_down
 
 
 def safe_float(value, default: float = 0.0) -> float:
@@ -255,3 +262,23 @@ def safe_int(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def is_btc_5m_market(question: str) -> bool:
+    """
+    Detect if a market is a BTC 5-minute Up/Down market.
+
+    Polymarket BTC 5m market titles follow patterns like:
+    - "Bitcoin Up or Down - February 16, 3:20PM-3:25PM ET"
+    - "BTC Up/Down - Feb 16, 10:00AM-10:05AM ET"
+
+    Args:
+        question: Market question/title
+
+    Returns:
+        True if this is a BTC 5-minute market
+    """
+    q = question.lower()
+    has_btc = "bitcoin" in q or "btc" in q
+    has_direction = "up or down" in q or "up/down" in q
+    return has_btc and has_direction
