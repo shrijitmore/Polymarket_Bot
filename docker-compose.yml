@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: polymarket_mongo
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-changeme}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+      - ./backups:/backups
+    networks:
+      - bot_network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  bot:
+    build: .
+    container_name: polymarket_bot
+    restart: always
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      # MongoDB connection
+      MONGO_URI: mongodb://admin:${MONGO_ROOT_PASSWORD:-changeme}@mongodb:27017/polymarket_bot?authSource=admin
+
+      # Polymarket credentials
+      POLYMARKET_PRIVATE_KEY: ${POLYMARKET_PRIVATE_KEY}
+
+      # Trading parameters
+      BANKROLL: ${BANKROLL:-5000}
+      DRY_RUN: ${DRY_RUN:-true}
+
+      # Telegram (optional)
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+
+      # Log level
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - bot_network
+    stdin_open: true
+    tty: true
+
+volumes:
+  mongo_data:
+    driver: local
+
+networks:
+  bot_network:
+    driver: bridge
