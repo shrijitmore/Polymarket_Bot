@@ -122,10 +122,11 @@ class TestRiskGuardIntegration:
         executor = OrderExecutor(asyncio.Queue())
         await executor._execute_signal(sample_signal)
 
-        # Should record failed trade
-        patch_risk_guard.record_trade_result.assert_called_once()
-        call_args = patch_risk_guard.record_trade_result.call_args
-        assert call_args[0][1] is False  # success=False
+        # When risk guard rejects, _record_failed_trade is called (updates DB)
+        # but record_trade_result is NOT called (early return)
+        patch_risk_guard.validate_trade.assert_called_once()
+        # The failed trade should be recorded in DB via update_position
+        patch_db.update_position.assert_called_once()
 
 
 class TestPositionRecord:
