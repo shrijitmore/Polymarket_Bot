@@ -11,6 +11,7 @@ import { MetricCard } from './components/MetricCard';
 import { PositionsTable } from './components/PositionsTable';
 import { SystemLog } from './components/SystemLog';
 import { PnlChart } from './components/PnlChart';
+import { ResolverLog } from './components/ResolverLog';
 import { type Stats, type Position, type EventLog, type PnlDay } from './types';
 import axios from 'axios';
 import clsx from 'clsx';
@@ -217,8 +218,9 @@ function App() {
                     <PnlChart data={pnlHistory} />
                 </div>
 
-                {/* Right: System Log */}
+                {/* Right: Resolver Log + System Log */}
                 <div className="space-y-6">
+                    <ResolverLog events={events} />
                     <SystemLog events={events} />
                 </div>
             </div>

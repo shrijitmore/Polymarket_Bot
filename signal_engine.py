@@ -50,6 +50,13 @@ class SignalEngine:
                     self._recently_signaled.clear()
                     continue
 
+                # Gate: if btc_5m_only is set, skip non-BTC-5m markets entirely
+                if settings.btc_5m_only:
+                    question = market.get("question", "")
+                    if not is_btc_5m_market(question) and not market.get("is_btc_5m", False):
+                        self.market_queue.task_done() if hasattr(self.market_queue, 'task_done') else None
+                        continue
+
                 # Check all enabled strategies
                 signals = []
 

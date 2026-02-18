@@ -33,6 +33,8 @@ class MarketScanner:
         self.gamma_api_url = "https://gamma-api.polymarket.com"
         self.session: Optional[aiohttp.ClientSession] = None
         self.running = False
+        # Hot-loop watchlist: market_id → enriched market snapshot
+        self._watchlist: Dict[str, Dict[str, Any]] = {}
 
     async def start(self) -> None:
         """Start the market scanner with dual-mode scan loops."""
@@ -44,7 +46,11 @@ class MarketScanner:
 
         tasks = [asyncio.create_task(self._arb_scan_loop())]
         if settings.enable_late_market:
-            tasks.append(asyncio.create_task(self._btc_5m_scan_loop()))
+            # Two-stage late-market pipeline:
+            # 1. Watchlist feeder — polls Gamma every 10s to find candidates
+            # 2. Hot-loop — polls orderbooks every 0.5s for watchlist markets only
+            tasks.append(asyncio.create_task(self._watchlist_feeder_loop()))
+            tasks.append(asyncio.create_task(self._hot_loop()))
 
         try:
             await asyncio.gather(*tasks)
@@ -159,40 +165,175 @@ class MarketScanner:
         return True
 
     # ================================================================
-    # BTC 5M FAST SCAN LOOP
+    # LATE-MARKET HOT-LOOP WATCHLIST
     # ================================================================
 
-    async def _btc_5m_scan_loop(self) -> None:
-        """Fast scan loop for BTC 5-minute late-market opportunities."""
-        logger.info("BTC 5m fast-scan loop started (interval: 2s)")
+    # ── Stage 1: Watchlist feeder (runs every 10s) ──────────────────
+
+    async def _watchlist_feeder_loop(self) -> None:
+        """
+        Polls Gamma API every 10s to find BTC 5m markets closing within
+        the watchlist horizon (default: 5 min). Adds them to self._watchlist
+        so the hot-loop can monitor them without hitting Gamma again.
+        """
+        horizon = settings.watchlist_horizon_seconds  # e.g. 300s = 5 min
+        logger.info(
+            f"Watchlist feeder started — horizon={horizon}s, "
+            f"hot-loop interval={settings.hot_loop_interval_ms}ms"
+        )
         while self.running:
             try:
-                await self._scan_btc_5m_markets()
-                await asyncio.sleep(settings.btc_5m_scan_interval_seconds)
+                await self._refresh_watchlist(horizon)
             except Exception as e:
-                logger.error(f"BTC 5m scan error: {e}", exc_info=True)
-                await asyncio.sleep(3)
+                logger.error(f"Watchlist feeder error: {e}", exc_info=True)
+            await asyncio.sleep(settings.watchlist_feeder_interval_seconds)
 
-    async def _scan_btc_5m_markets(self) -> None:
-        """Scan for BTC 5-minute markets approaching close."""
-        try:
-            markets = await self._fetch_btc_5m_markets()
+    async def _refresh_watchlist(self, horizon: int) -> None:
+        """Fetch BTC 5m markets from Gamma and update the watchlist."""
+        markets = await self._fetch_btc_5m_markets()
+        now_candidates: set = set()
 
-            for market in markets:
-                try:
-                    if not self._passes_btc_5m_filters(market):
-                        continue
+        for market in markets:
+            question = market.get("question", "")
+            if not is_btc_5m_market(question):
+                continue
+            if not market.get("active", False):
+                continue
+            if not market.get("acceptingOrders", True):
+                continue
 
+            end_date = market.get("endDate") or market.get("end_date_iso")
+            if not end_date:
+                continue
+
+            try:
+                expires_at = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                secs = time_to_close(expires_at)
+            except Exception:
+                continue
+
+            # Add to watchlist if closing within horizon
+            if 0 < secs <= horizon:
+                market_id = market.get("id") or market.get("condition_id") or market.get("conditionId")
+                if not market_id:
+                    continue
+                now_candidates.add(market_id)
+
+                if market_id not in self._watchlist:
+                    # First time seeing this market — do a full enrich
                     enriched = await self._enrich_with_orderbook(market)
                     if enriched:
                         enriched["is_btc_5m"] = True
-                        await self.market_queue.put(enriched)
+                        self._watchlist[market_id] = enriched
+                        logger.info(
+                            f"📋 Watchlist +ADD: {question[:60]} | {secs:.0f}s to close"
+                        )
 
-                except Exception as e:
-                    logger.debug(f"Error processing BTC 5m market: {e}")
+        # Prune markets that have closed or left the horizon
+        stale = [mid for mid in self._watchlist if mid not in now_candidates]
+        for mid in stale:
+            q = self._watchlist[mid].get("question", mid)[:50]
+            logger.debug(f"Watchlist -REMOVE: {q}")
+            del self._watchlist[mid]
 
-        except Exception as e:
-            logger.error(f"Error scanning BTC 5m markets: {e}", exc_info=True)
+        if self._watchlist:
+            logger.debug(f"Watchlist: {len(self._watchlist)} active candidates")
+
+    # ── Stage 2: Hot-loop (runs every 0.5s) ─────────────────────────
+
+    async def _hot_loop(self) -> None:
+        """
+        Runs every hot_loop_interval_ms milliseconds.
+        For each market in the watchlist:
+          - Refreshes orderbooks only (no Gamma API call)
+          - Checks if the market is now inside the 30s entry window
+          - Pushes to the signal queue if so
+        """
+        interval = settings.hot_loop_interval_ms / 1000.0  # convert ms → seconds
+        logger.info(f"Hot-loop started — interval={settings.hot_loop_interval_ms}ms")
+        while self.running:
+            try:
+                await self._hot_loop_tick()
+            except Exception as e:
+                logger.error(f"Hot-loop error: {e}", exc_info=True)
+            await asyncio.sleep(interval)
+
+    async def _hot_loop_tick(self) -> None:
+        """Single hot-loop tick — refresh orderbooks and push candidates."""
+        if not self._watchlist:
+            return
+
+        for market_id, market in list(self._watchlist.items()):
+            try:
+                expires_at_str = market.get("expires_at")
+                if not expires_at_str:
+                    continue
+
+                expires_at = datetime.fromisoformat(
+                    expires_at_str.replace('Z', '+00:00')
+                )
+                secs = time_to_close(expires_at)
+
+                # Drop from watchlist if expired
+                if secs <= 0:
+                    logger.debug(f"Hot-loop: market {market_id} expired, removing")
+                    self._watchlist.pop(market_id, None)
+                    continue
+
+                # Only refresh orderbooks + push when inside the entry window
+                if not is_within_late_window(
+                    expires_at,
+                    settings.late_market_window_start,
+                    settings.late_market_window_end,
+                ):
+                    continue
+
+                # Refresh orderbooks in-place (cheap — no Gamma API call)
+                refreshed = await self._refresh_orderbooks(market)
+                if refreshed:
+                    self._watchlist[market_id] = refreshed
+                    logger.debug(
+                        f"🔥 Hot-loop: pushing {market.get('question','')[:50]} | {secs:.1f}s left"
+                    )
+                    await self.market_queue.put(refreshed)
+
+            except Exception as e:
+                logger.warning(f"Hot-loop tick error for {market_id}: {e}")
+
+    async def _refresh_orderbooks(self, market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Re-fetch only the orderbooks for each outcome in a watchlist market.
+        Returns the updated market dict, or None on failure.
+        """
+        outcomes = market.get("outcomes", [])
+        if not outcomes:
+            return None
+
+        refreshed_outcomes = []
+        for outcome in outcomes:
+            token_id = outcome.get("token_id")
+            if not token_id:
+                refreshed_outcomes.append(outcome)
+                continue
+
+            orderbook = await clob_client.get_orderbook(token_id)
+            if orderbook is None:
+                orderbook = outcome.get("orderbook", {
+                    "asks": [], "bids": [],
+                    "best_ask": None, "best_bid": None,
+                    "spread_pct": None, "asks_depth": 0, "bids_depth": 0
+                })
+
+            refreshed_outcomes.append({**outcome, "orderbook": orderbook})
+
+        return {**market, "outcomes": refreshed_outcomes}
+
+    # ── Legacy BTC 5m loop (kept for reference, replaced by hot-loop) ─
+
+    async def _btc_5m_scan_loop(self) -> None:
+        """[DEPRECATED] Old BTC 5m scan loop — replaced by watchlist + hot-loop."""
+        pass
+
 
     async def _fetch_btc_5m_markets(self) -> List[Dict[str, Any]]:
         """Fetch BTC 5-minute markets from Gamma API."""

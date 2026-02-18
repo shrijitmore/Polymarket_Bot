@@ -74,8 +74,8 @@ class Settings(BaseSettings):
     # LATE-MARKET STRATEGY (BTC 5m)
     # ========================================
     enable_late_market: bool = Field(default=True, description="Enable late-market strategy")
-    late_market_window_start: int = Field(default=180, gt=0, description="Late window start (sec before close)")
-    late_market_window_end: int = Field(default=60, gt=0, description="Late window end (sec before close)")
+    late_market_window_start: int = Field(default=30, gt=0, description="Late window start (sec before close)")
+    late_market_window_end: int = Field(default=5, gt=0, description="Late window end (sec before close)")
     late_market_min_deviation_pct: float = Field(default=0.05, gt=0, description="Min BTC price deviation %")
     late_market_max_volatility_pct: float = Field(default=1.5, gt=0, description="Max volatility %")
     late_market_max_price: float = Field(default=0.95, gt=0, le=1, description="Max entry price")
@@ -85,11 +85,16 @@ class Settings(BaseSettings):
     # ========================================
     btc_5m_scan_interval_seconds: int = Field(default=2, gt=0, description="BTC 5m scan interval seconds")
     btc_5m_min_volume: float = Field(default=100.0, gt=0, description="Min volume for BTC 5m markets")
+    # Hot-loop watchlist settings
+    watchlist_horizon_seconds: int = Field(default=300, gt=0, description="How far ahead (sec) to pre-load candidates into watchlist")
+    watchlist_feeder_interval_seconds: int = Field(default=10, gt=0, description="How often (sec) the feeder polls Gamma for new candidates")
+    hot_loop_interval_ms: int = Field(default=500, gt=0, description="Hot-loop orderbook refresh interval (ms)")
     
     # ========================================
     # FEATURE FLAGS
     # ========================================
     dry_run: bool = Field(default=True, description="Enable DRY RUN mode")
+    btc_5m_only: bool = Field(default=False, description="Restrict all strategies to BTC 5m markets only")
     enable_one_of_many: bool = Field(default=True, description="Enable 1-of-N arbitrage")
     enable_yes_no: bool = Field(default=True, description="Enable YES/NO arbitrage")
     scanner_interval_seconds: int = Field(default=5, gt=0, description="Scanner interval seconds")
@@ -114,8 +119,8 @@ class Settings(BaseSettings):
     @classmethod
     def validate_late_window(cls, v: int) -> int:
         """Validate late market window."""
-        if v < 10 or v > 600:
-            raise ValueError("Late market window must be between 10 and 600 seconds")
+        if v < 1 or v > 3600:
+            raise ValueError("Late market window must be between 1 and 3600 seconds")
         return v
     
     def model_post_init(self, __context) -> None:

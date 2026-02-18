@@ -1,6 +1,6 @@
 import { type EventLog } from '../types';
 import { format } from 'date-fns';
-import { Terminal } from 'lucide-react';
+import { Terminal, TrendingUp, TrendingDown } from 'lucide-react';
 import clsx from 'clsx';
 
 interface SystemLogProps {
@@ -13,6 +13,30 @@ const levelColors: Record<string, string> = {
     ERROR: 'text-accent',
     DEBUG: 'text-textDim',
 };
+
+function getEventIcon(ev: EventLog) {
+    if (ev.event_type === 'position_resolved') {
+        const pnl = (ev.details as Record<string, unknown>)?.realized_pnl;
+        if (typeof pnl === 'number') {
+            return pnl >= 0
+                ? <TrendingUp className="w-3 h-3 text-primary shrink-0 mt-0.5" />
+                : <TrendingDown className="w-3 h-3 text-accent shrink-0 mt-0.5" />;
+        }
+    }
+    return null;
+}
+
+function formatMessage(ev: EventLog): string {
+    const d = ev.details as Record<string, unknown>;
+    if (ev.event_type === 'position_resolved') {
+        const pnl = typeof d.realized_pnl === 'number' ? d.realized_pnl : 0;
+        const winner = d.winner ?? '?';
+        const strategy = d.strategy ?? '?';
+        const sign = pnl >= 0 ? '+' : '';
+        return `RESOLVED [${strategy}] winner=${winner} pnl=${sign}$${pnl.toFixed(4)}`;
+    }
+    return String(d?.message ?? d?.msg ?? ev.event_type.replace(/_/g, ' '));
+}
 
 export function SystemLog({ events }: SystemLogProps) {
     return (
@@ -39,15 +63,19 @@ export function SystemLog({ events }: SystemLogProps) {
                         }
                     })();
                     const colorClass = levelColors[ev.level] || 'text-textDim';
-                    const message =
-                        ev.details?.message ||
-                        ev.details?.msg ||
-                        ev.event_type.replace(/_/g, ' ');
+                    const message = formatMessage(ev);
+                    const icon = getEventIcon(ev);
+                    const isResolver = ev.event_type === 'position_resolved';
 
                     return (
                         <div
                             key={`${ev.timestamp}-${i}`}
-                            className="flex gap-2 leading-relaxed hover:bg-white/5 px-2 py-0.5 rounded transition-colors"
+                            className={clsx(
+                                'flex gap-2 leading-relaxed px-2 py-0.5 rounded transition-colors',
+                                isResolver
+                                    ? 'bg-primary/5 border border-primary/10 hover:bg-primary/10'
+                                    : 'hover:bg-white/5'
+                            )}
                         >
                             <span className="text-textDim opacity-50 shrink-0">
                                 [{time}]
@@ -60,8 +88,9 @@ export function SystemLog({ events }: SystemLogProps) {
                             >
                                 {ev.level}
                             </span>
+                            {icon}
                             <span className={clsx('truncate', colorClass)}>
-                                {String(message)}
+                                {message}
                             </span>
                         </div>
                     );
