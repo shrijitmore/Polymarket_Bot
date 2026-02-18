@@ -14,6 +14,7 @@ from executor import start_executor
 from binance_feed import start_binance_feed
 from risk_guard import get_risk_guard
 from clob_client import init_clob_client
+from position_resolver import start_position_resolver
 
 logger = get_logger("main")
 
@@ -29,6 +30,7 @@ class TradingBot:
         self.signal_engine = None
         self.executor = None
         self.binance_feed = None
+        self.resolver = None
         self.running = False
     
     async def start(self) -> None:
@@ -85,6 +87,10 @@ class TradingBot:
             logger.info("Starting order executor...")
             self.executor = await start_executor(self.signal_queue)
             
+            # Start position resolver (DRY_RUN PnL tracking)
+            logger.info("Starting position resolver...")
+            self.resolver = await start_position_resolver()
+            
             logger.info("")
             logger.info("✅ All systems operational!")
             logger.info("=" * 60)
@@ -118,6 +124,9 @@ class TradingBot:
         
         if self.executor:
             await self.executor.stop()
+        
+        if self.resolver:
+            await self.resolver.stop()
         
         if self.binance_feed:
             await self.binance_feed.stop()

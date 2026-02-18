@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     enable_one_of_many: bool = Field(default=True, description="Enable 1-of-N arbitrage")
     enable_yes_no: bool = Field(default=True, description="Enable YES/NO arbitrage")
     scanner_interval_seconds: int = Field(default=5, gt=0, description="Scanner interval seconds")
+    resolver_interval_seconds: int = Field(default=60, gt=0, description="Position resolver poll interval seconds")
     
     # ========================================
     # LOGGING

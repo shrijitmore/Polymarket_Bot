@@ -34,13 +34,17 @@ class CLOBClient:
 
             def _init_client():
                 if settings.polymarket_api_key and settings.polymarket_api_secret:
+                    from py_clob_client.clob_types import ApiCreds
                     logger.info("Initializing CLOB client with API key authentication")
-                    return ClobClient(
-                        host=settings.polymarket_api_url,
-                        key=settings.polymarket_private_key or "",
+                    creds = ApiCreds(
                         api_key=settings.polymarket_api_key,
                         api_secret=settings.polymarket_api_secret,
                         api_passphrase=settings.polymarket_api_passphrase,
+                    )
+                    return ClobClient(
+                        host=settings.polymarket_api_url,
+                        key=settings.polymarket_private_key or "",
+                        creds=creds,
                         chain_id=settings.polymarket_chain_id
                     )
                 elif settings.polymarket_private_key:
