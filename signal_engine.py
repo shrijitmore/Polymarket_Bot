@@ -6,7 +6,8 @@ Implements three strategies:
 3. Late-Market Sure Side (BTC 5m)
 """
 import asyncio
-from datetime import datetime
+import random
+from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from config import settings
 from db import db
@@ -34,6 +35,7 @@ class SignalEngine:
         self.signal_queue = signal_queue
         self.running = False
         self._recently_signaled: set = set()
+        self._dry_run_counter: int = 0  # throttle sim signals
 
     async def start(self) -> None:
         """Start the signal engine."""
@@ -79,6 +81,20 @@ class SignalEngine:
                 for signal in signals:
                     await self.signal_queue.put(signal)
 
+                # DRY_RUN simulation: generate synthetic signals when no real ones fire
+                # This exercises the full pipeline without waiting for rare real arb
+                if settings.dry_run and not signals and settings.dry_run_sim_interval > 0:
+                    self._dry_run_counter += 1
+                    if self._dry_run_counter >= settings.dry_run_sim_interval:
+                        self._dry_run_counter = 0
+                        sim_signal = self._generate_dry_run_signal(market)
+                        if sim_signal:
+                            logger.info(
+                                f"[DRY_RUN SIM] Synthetic signal: {sim_signal['strategy']} | "
+                                f"edge={sim_signal['expected_edge']:.1f}%"
+                            )
+                            await self.signal_queue.put(sim_signal)
+
                 # Periodic cleanup of dedup set
                 cleanup_counter += 1
                 if cleanup_counter % 200 == 0:
@@ -92,6 +108,89 @@ class SignalEngine:
         """Stop the signal engine."""
         self.running = False
         logger.info("Signal engine stopped")
+
+    def _generate_dry_run_signal(self, market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Generate a synthetic signal from real market data for DRY_RUN testing.
+        Uses actual market IDs and questions but simulates edge prices so the
+        full pipeline (signal → executor → resolver → dashboard) can be tested.
+        """
+        market_id = market.get("market_id")
+        if not market_id or market_id in self._recently_signaled:
+            return None
+
+        outcomes = market.get("outcomes", [])
+        expires_at_str = market.get("expires_at")
+        question = market.get("question", "")
+
+        if not outcomes or not expires_at_str:
+            return None
+
+        # Simulate a realistic edge (2–8%)
+        sim_edge = round(random.uniform(2.0, 8.0), 2)
+
+        if len(outcomes) >= 3:
+            n = len(outcomes)
+            per_price = round((1.0 - sim_edge / 100) / n, 4)
+            total_cost = per_price * n
+            position_size_usd = settings.max_arb_position_size / n
+            legs = [
+                {
+                    "outcome": o.get("outcome"),
+                    "token_id": o.get("token_id"),
+                    "neg_risk": market.get("neg_risk", False),
+                    "price": per_price,
+                    "size_usd": position_size_usd,
+                    "size_tokens": round(position_size_usd / per_price, 2) if per_price > 0 else 0,
+                    "spread_pct": 0.5,
+                }
+                for o in outcomes
+            ]
+            strategy = "one_of_many"
+        else:
+            price_yes = round(random.uniform(0.35, 0.65), 4)
+            price_no = round(1.0 - sim_edge / 100 - price_yes, 4)
+            if price_no <= 0:
+                return None
+            total_cost = price_yes + price_no
+            position_size_usd = settings.max_arb_position_size / 2
+            legs = [
+                {
+                    "outcome": outcomes[0].get("outcome", "Yes"),
+                    "token_id": outcomes[0].get("token_id"),
+                    "neg_risk": market.get("neg_risk", False),
+                    "price": price_yes,
+                    "size_usd": position_size_usd,
+                    "size_tokens": round(position_size_usd / price_yes, 2),
+                    "spread_pct": 0.5,
+                },
+                {
+                    "outcome": outcomes[1].get("outcome", "No") if len(outcomes) > 1 else "No",
+                    "token_id": outcomes[1].get("token_id") if len(outcomes) > 1 else None,
+                    "neg_risk": market.get("neg_risk", False),
+                    "price": price_no,
+                    "size_usd": position_size_usd,
+                    "size_tokens": round(position_size_usd / price_no, 2),
+                    "spread_pct": 0.5,
+                },
+            ]
+            strategy = "yes_no"
+
+        self._recently_signaled.add(market_id)
+
+        return {
+            "strategy": strategy,
+            "market_id": market_id,
+            "question": question,
+            "legs": legs,
+            "total_cost": total_cost,
+            "expected_payout": 1.0,
+            "expected_edge": sim_edge,
+            "expires_at": expires_at_str,
+            "position_id": generate_position_id(market_id, strategy),
+            "detected_at": datetime.utcnow().isoformat(),
+            "is_simulated": True,
+        }
 
     async def _check_one_of_many_arb(self, market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """

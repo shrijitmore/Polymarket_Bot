@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     # FEATURE FLAGS
     # ========================================
     dry_run: bool = Field(default=True, description="Enable DRY RUN mode")
+    dry_run_sim_interval: int = Field(default=10, ge=0, description="DRY_RUN: generate 1 synthetic signal every N markets (0=disabled)")
     btc_5m_only: bool = Field(default=False, description="Restrict all strategies to BTC 5m markets only")
     enable_one_of_many: bool = Field(default=True, description="Enable 1-of-N arbitrage")
     enable_yes_no: bool = Field(default=True, description="Enable YES/NO arbitrage")
